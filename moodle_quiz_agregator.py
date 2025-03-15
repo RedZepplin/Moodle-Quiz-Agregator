@@ -251,10 +251,11 @@ if __name__ == '__main__':
     mhtml_files = [os.path.join(mhtml_folder, f) for f in os.listdir(mhtml_folder) if f.endswith('.mhtml')]
 
     # Output file for the consolidated document
-    output_file = 'consolidated_document.html'
-    output_pdf = 'consolidated_document.pdf'
+    output_file = 'Consolidated_Assessment.html'
+    output_pdf = 'Consolidated_Assessment.pdf'
 
     # Consolidate the files
     consolidate_mhtml_files(mhtml_files, output_file)
     # Convert HTML to PDF with one question per page
-    convert_html_to_pdf(output_file, output_pdf)
+    #
+    # convert_html_to_pdf(output_file, output_pdf)
