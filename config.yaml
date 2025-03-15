@@ -1,0 +1,11 @@
+name: moodle-quiz-agregator
+channels:
+  - conda-forge
+dependencies:
+  - python=3.9
+  - beautifulsoup4
+  - pdfkit
+  - wkhtmltopdf
+  - pip
+  - pip:
+      - pywin32
