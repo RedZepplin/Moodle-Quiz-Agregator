@@ -351,70 +351,100 @@ def extract_css_from_mhtml(mhtml_file):
 
 def convert_html_to_pdf(html_file, output_pdf):
     """Convert the consolidated HTML file to PDF with each question on a separate page."""
-    # Check if wkhtmltopdf is installed and get its path
-    wkhtmltopdf_path = find_wkhtmltopdf()
+    wkhtmltopdf_path = find_wkhtmltopdf() # Assumes find_wkhtmltopdf exists
     if not wkhtmltopdf_path:
-        raise OSError("wkhtmltopdf not found. Please install it and ensure it's in your system's PATH.")
+         raise OSError("wkhtmltopdf not found. Please install it and ensure it's in your system's PATH.")
 
     config = pdfkit.configuration(wkhtmltopdf=wkhtmltopdf_path)
 
     options = {
-        'no-outline': None,  # Disable outlines in the PDF
-        'margin-top': '20mm',  # Set top margin
-        'margin-right': '20mm',  # Set right margin
-        'margin-bottom': '20mm',  # Set bottom margin
-        'margin-left': '20mm',  # Set left margin
-        'page-size': 'A4',  # Set page size to A4
-        'footer-right': '[page]',  # Add page numbers to the footer
-        'footer-font-size': '10',  # Set footer font size
-        'disable-smart-shrinking': None,  # Avoid shrinking content to fit on the page
-        'enable-local-file-access': None, # Enable local file access
+        'no-outline': None,
+        'margin-top': '10mm',
+        'margin-right': '10mm',
+        'margin-bottom': '10mm',
+        'margin-left': '10mm',
+        'page-size': 'A4',
+        'footer-right': '[page]',
+        'footer-font-size': '10',
+        'disable-smart-shrinking': None, # Keep this, usually helps more than it hurts
+        'enable-local-file-access': None,
+        'encoding': "UTF-8",
+        # --- NEW/MODIFIED OPTIONS ---
+        'viewport-size': '1280x1024', # Set a virtual viewport size
+        'zoom': '0.95',               # Try zooming out slightly
+        # --- End of New Options ---
     }
 
-    # Make sure the questions are in individual divs, so each div becomes a page.
-    # Ensure your HTML content has separate divs for each question
-    with open(html_file, 'r', encoding='utf-8') as file:
-        html_content = file.read()
-
-    # Add a page break *before* each question div (except the first one)
-    # We modify the BeautifulSoup object *before* writing to HTML for cleaner page breaks
-    # This modification should ideally happen within consolidate_mhtml_files before writing the file,
-    # or we re-parse the HTML here. Re-parsing is simpler for this example.
-
-    soup = BeautifulSoup(html_content, 'html.parser')
-    first_que = True
-    for que_div in soup.find_all('div', class_='que'):
-        if not first_que:
-            # Add page break style
-            if 'style' in que_div.attrs:
-                que_div['style'] += '; page-break-before: always;'
-            else:
-                que_div['style'] = 'page-break-before: always;'
-        first_que = False
-
-    modified_html_content = str(soup)
-
-
-    # Save the modified HTML as a temporary file and convert to PDF
     try:
+        with open(html_file, 'r', encoding='utf-8') as file:
+            html_content = file.read()
+    except FileNotFoundError:
+        print(f"Error: HTML file not found for PDF conversion: {html_file}")
+        return
+    except Exception as e:
+        print(f"Error reading HTML file {html_file} for PDF conversion: {e}")
+        return
+
+    # Add page break *before* each question div and try to prevent breaks *inside*
+    try:
+        soup = BeautifulSoup(html_content, 'html.parser')
+
+        # --- Add CSS to prevent breaking inside questions ---
+        style_tag = soup.head.find('style')
+        if not style_tag:
+            style_tag = soup.new_tag('style')
+            soup.head.append(style_tag) # Append if no style tag exists
+
+        # Add the rule to the existing or new style tag
+        # Important: Use !important to increase chance of overriding other styles
+        style_tag.string = (style_tag.string or '') + "\n.que { page-break-inside: avoid !important; overflow-wrap: break-word; } img { max-width: 100% !important; height: auto !important; }"
+        # Also added overflow-wrap and img max-width as common helpers
+        # --- End of CSS addition ---
+
+
+        first_que = True
+        for que_div in soup.find_all('div', class_='que'):
+            if not first_que:
+                # Add page break style before
+                if 'style' in que_div.attrs:
+                    # Ensure we don't duplicate the style if run multiple times on same file (though unlikely here)
+                    if 'page-break-before' not in que_div['style']:
+                         que_div['style'] += '; page-break-before: always;'
+                else:
+                    que_div['style'] = 'page-break-before: always;'
+            first_que = False
+
+        modified_html_content = str(soup)
+
+        # Optional: Save the modified HTML for debugging PDF issues
+        # with open("debug_pdf_input.html", "w", encoding="utf-8") as f:
+        #     f.write(modified_html_content)
+
+    except Exception as e:
+        print(f"Warning: Error modifying HTML for PDF page breaks/styling: {e}")
+        # Fallback to original content if modification fails
+        modified_html_content = html_content
+
+    # Convert to PDF
+    try:
+        print("Starting PDF conversion with wkhtmltopdf...")
         pdfkit.from_string(modified_html_content, output_pdf, options=options, configuration=config)
         print(f'PDF saved as {output_pdf}')
     except OSError as e:
-        # Check if it's the specific "exit status 1" error often related to rendering issues
-        if 'exit status 1' in str(e):
-             print(f"Warning: wkhtmltopdf exited with status 1. This might indicate rendering issues (e.g., missing assets, complex JS/CSS). The PDF might be incomplete or malformed.")
-             print(f"PDF saved as {output_pdf} (potentially with issues)") # Still save the potentially partial PDF
+        if 'exit status 1' in str(e) or 'Done' in str(e):
+             print(f"Warning: wkhtmltopdf exited with status 1 or unusual output. PDF might be incomplete or have rendering issues.")
+             print(f"PDF saved as {output_pdf} (potentially with issues)")
+        # Specific check for permission errors
+        elif 'Permission denied' in str(e):
+             print(f"Error: Permission denied during PDF conversion. Check write permissions for the output directory and wkhtmltopdf execution permissions.")
+        # Specific check for network/resource errors often indicated by exit code 1
+        elif 'exit code 1' in str(e) and ('HostNotFoundError' in str(e) or 'ContentNotFoundError' in str(e)):
+             print(f"Error: wkhtmltopdf failed to load a resource (e.g., image, CSS). Check network connection or resource paths.")
+             print(f"PDF saved as {output_pdf} (potentially with issues)")
         else:
-            print(f"Error during PDF conversion: {e}")
-            # Optional: Add retry logic if needed, but often wkhtmltopdf errors are persistent
-            # print("Retrying in 5 seconds...")
-            # time.sleep(5)
-            # try:
-            #     pdfkit.from_string(modified_html_content, output_pdf, options=options, configuration=config)
-            #     print(f'PDF saved as {output_pdf} after retry')
-            # except OSError as e_retry:
-            #     print(f"Error during PDF conversion after retry: {e_retry}")
-            #     print("Please check wkhtmltopdf installation and HTML content.")
+            print(f"Error during PDF conversion (wkhtmltopdf): {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred during PDF conversion: {e}")
 
 
 def find_wkhtmltopdf():
