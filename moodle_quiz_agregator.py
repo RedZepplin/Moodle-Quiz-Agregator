@@ -7,6 +7,29 @@ import pdfkit
 import subprocess
 import time
 import re # <-- Import the re module
+import argparse # <-- Import argparse
+import sys
+
+def sanitize_filename(name):
+    """Removes or replaces characters invalid for filenames."""
+    if not name:
+        return "Untitled_Assessment"
+    # Remove characters invalid in Windows/Linux/MacOS filenames
+    # Including characters like '.', ':', etc., often found in Moodle titles
+    name = re.sub(r'[<>:"/\\|?*.,;!]', '', name)
+    # Replace consecutive whitespace with a single underscore
+    name = re.sub(r'\s+', '_', name).strip('_')
+    # Limit length (optional)
+    max_len = 100
+    if len(name) > max_len:
+        # Try to truncate nicely at an underscore
+        truncated_name = name[:max_len]
+        if '_' in truncated_name:
+            name = truncated_name.rsplit('_', 1)[0]
+        else:
+            name = truncated_name
+    # Ensure filename is not empty after sanitization
+    return name if name else "Untitled_Assessment"
 
 # --- Helper function to determine state from grade ---
 def determine_correctness_from_grade(grade_text):
@@ -53,54 +76,102 @@ def determine_correctness_from_grade(grade_text):
 # --- Existing functions (extract_html_from_mhtml, extract_divs_from_html) remain the same ---
 # ... (keep extract_html_from_mhtml and extract_divs_from_html as they are) ...
 def extract_html_from_mhtml(mhtml_file):
-    """Extracts HTML content and images from an MHTML file."""
-    images = {}  # Dictionary to hold images as base64 data
-    header_content = ""  # Variable to store the header content
-    html_content = ""
-    with open(mhtml_file, 'rb') as f:
-        msg = email.message_from_binary_file(f, policy=policy.default)
+    """
+    Extracts HTML body content string, images, header content string, and document title
+    from an MHTML file. Does NOT destructively modify the body content.
+    """
+    images = {}
+    header_content_str = ""
+    body_content_str = ""
+    document_title = None # Initialize title
 
-    # Look for the HTML and image parts in the MHTML file
+    try:
+        with open(mhtml_file, 'rb') as f:
+            msg = email.message_from_binary_file(f, policy=policy.default)
+    except FileNotFoundError:
+        print(f"Error: MHTML file not found: {mhtml_file}")
+        return None, {}, "", None # Return None for body, empty dict, empty str, None title
+    except Exception as e:
+        print(f"Error reading MHTML file {mhtml_file}: {e}")
+        return None, {}, "", None
+
     for part in msg.iter_parts():
         content_type = part.get_content_type()
         if content_type == 'text/html':
-            current_html_content = part.get_payload(decode=True).decode('utf-8', errors='ignore')
-            # Extract header content (for title)
-            soup = BeautifulSoup(current_html_content, 'html.parser')
-            # Find the header content within the body
-            body = soup.find('body', id='page-mod-quiz-review')
-            if body:
-                # Extract the header content
-                print("Extracting Header")
-                header_div = body.find('header', id ='page-header')
-                
-                if header_div:
-                    print("Header Found")
-                    header_content = str(header_div)
+            try:
+                # Decode the primary HTML content
+                current_html_content = part.get_payload(decode=True).decode('utf-8', errors='ignore')
+                soup = BeautifulSoup(current_html_content, 'html.parser') # Parse once
+            except Exception as e:
+                print(f"Error parsing HTML from {mhtml_file}: {e}")
+                continue # Skip this part if parsing fails
 
-                    
-                    
-                # Remove the header from the html content
+            # --- Find the body content for question extraction ---
+            # Find body tag - use a more general approach first
+            body = soup.find('body')
+            # If specific ID is needed and reliable:
+            # body = soup.find('body', id='page-mod-quiz-review')
+
+            if body:
+                # --- Get the body content string ---
+                # IMPORTANT: Get string representation of the body as found, BEFORE any potential modifications
+                body_content_str = str(body)
+
+                # --- Extract header separately WITHOUT modifying the body object ---
+                # Find header in the original soup (adjust selector if needed)
+                header_div = soup.find('header', id='page-header')
                 if header_div:
-                    print("Removing Header")
-                    header_div.extract()
-                html_content = str(body)
+                    header_content_str = str(header_div) # Store header HTML string
+
+                    # --- Extract Title from Header ---
+                    # Look for h1, then h2, then h3 within the header_div
+                    heading_tag = header_div.find(['h1', 'h2', 'h3','h4'])
+                    if heading_tag:
+                        # Try to get text more cleanly, removing potential inner tags like spans if needed
+                        title_text = heading_tag.get_text(separator=' ', strip=True)
+                        if title_text:
+                            document_title = title_text
+                            # print(f"  Found title: '{document_title}'") # Optional debug print
+                    # else:
+                        # print(f"  Warning: No h1, h2, or h3 found within header#page-header in {mhtml_file}")
 
             else:
-                print("Not Extracting")
-                #html_content = current_html_content
-                print(html_content)
+                # Fallback if no body tag is found
+                print(f"Warning: No <body> tag found in {mhtml_file}. Using full HTML for body content.")
+                body_content_str = current_html_content
+                # Still try to find header and title in the full soup
+                header_div = soup.find('header', id='page-header')
+                if header_div:
+                    header_content_str = str(header_div)
+                    heading_tag = header_div.find(['h1', 'h2', 'h3'])
+                    if heading_tag:
+                        title_text = heading_tag.get_text(separator=' ', strip=True)
+                        if title_text:
+                            document_title = title_text
+                            # print(f"  Found title (no body tag): '{document_title}'") # Optional debug print
+
+            # Only process the first HTML part found
+            break # Assume only one main HTML part per MHTML
+
         elif content_type.startswith('image'):
-            image_data = part.get_payload(decode=True)
-            content_disposition = part.get('Content-Disposition', '')
-            # Get the filename of the image (usually used as the reference)
-            filename = content_disposition.split('filename=')[-1].strip('"') if 'filename=' in content_disposition else 'image'
-            # Convert the image to base64
-            image_base64 = base64.b64encode(image_data).decode('utf-8')
-            # Content-Location will be the URL we need to map from the HTML <img src=...>
-            content_location = part.get('Content-Location', '')
-            images[content_location] = (image_base64, content_type.split('/')[1])  # Store both base64 and MIME type
-    return html_content, images, header_content
+            # Image handling
+            try:
+                image_data = part.get_payload(decode=True)
+                content_disposition = part.get('Content-Disposition', '')
+                # Get the filename of the image (usually used as the reference)
+                filename = content_disposition.split('filename=')[-1].strip('"') if 'filename=' in content_disposition else 'image'
+                # Content-Location will be the URL we need to map from the HTML <img src=...>
+                content_location = part.get('Content-Location', '')
+                if content_location: # Ensure content_location is not empty
+                    image_base64 = base64.b64encode(image_data).decode('utf-8')
+                    images[content_location] = (image_base64, content_type.split('/')[1])  # Store both base64 and MIME type
+                # else:
+                    # print(f"Warning: Image found without Content-Location in {mhtml_file}. Skipping.") # Optional debug
+            except Exception as e:
+                print(f"Error processing image in {mhtml_file}: {e}")
+
+    # Return the original body content string, images, header string, and extracted title
+    return body_content_str, images, header_content_str, document_title
 
 def extract_divs_from_html(html_content):
     """Extract divs with class 'que' from the HTML content."""
@@ -161,87 +232,99 @@ def deduplicate_and_replace_with_correct(questions):
 # --- consolidate_mhtml_files function ---
 # Needs a small adjustment to handle the re import if not already done globally
 # Also, ensure the logic using seen_divs still makes sense after deduplication
-def consolidate_mhtml_files(mhtml_files, output_file):
-    """Consolidates divs with class 'que' from multiple MHTML files into one document."""
-    consolidated_html = '<html><head><title>Consolidated Document</title>'
+def consolidate_mhtml_files(mhtml_files, output_html_file, first_file_header_str=""):
+    """
+    Consolidates divs with class 'que' from multiple MHTML files into one HTML document.
+    Uses the provided header string from the first file.
+    """
+    # Use the title from the output filename for the HTML title tag
+    html_title = os.path.splitext(os.path.basename(output_html_file))[0].replace('_', ' ')
+    consolidated_html = f'<html><head><meta charset="UTF-8"><title>{html_title}</title>' # Use dynamic title
 
-    # Extract CSS and header from the first MHTML file
+    # Extract CSS from the first MHTML file (still needed here)
     if mhtml_files:
         first_mhtml_file = mhtml_files[0]
-        css_content = extract_css_from_mhtml(first_mhtml_file)
-        html_content, images, header_content = extract_html_from_mhtml(first_mhtml_file)
-
+        css_content = extract_css_from_mhtml(first_mhtml_file) # Assumes extract_css_from_mhtml exists and is correct
         if css_content:
             consolidated_html += f'<style>{css_content}</style>'
 
-        # Add wrapper header content from the first MHTML file
-        if header_content:
-            consolidated_html += f'{header_content}'  # Ensure we insert header content here
+    # Add the header content string passed from the main block
+    if first_file_header_str:
+        consolidated_html += f'{first_file_header_str}'
 
     consolidated_html += '</head><body><section>' # Start the main content section
 
-    question_number = 1  # Initialize the question number
-
-    all_images = {}  # Dictionary to store all images (prioritize first file's images if conflicts)
-
-    questions_to_process = []  # List to collect all 'que' divs from all files
+    question_number = 1
+    all_images = {}
+    questions_to_process = []
 
     # Process all files to gather questions and images
     for mhtml_file in mhtml_files:
         print(f'Processing {mhtml_file}...')
-        html_content, images, _ = extract_html_from_mhtml(mhtml_file)
+        # Get body content and images for this file
+        # We ignore header_content and title returned here as they are handled elsewhere/already extracted
+        body_content, images, _, _ = extract_html_from_mhtml(mhtml_file)
 
-        # Merge images, giving priority to existing ones (usually from the first file)
+        if body_content is None: # Check if extraction failed
+            print(f"Skipping file due to extraction error: {mhtml_file}")
+            continue
+
+        # Merge images, giving priority to existing ones
         for loc, data in images.items():
             if loc not in all_images:
                 all_images[loc] = data
-        if html_content:
-            soup = BeautifulSoup(html_content, 'html.parser')
-            # Extract all the 'que' divs
-            for div in soup.find_all('div', class_='que'):
-                
-                questions_to_process.append(div)
 
-    # Deduplicate and prioritize based on the grade using the modified function
-    final_questions = deduplicate_and_replace_with_correct(questions_to_process)
-    # Now, process the final list of unique, best-state questions
+        # Parse the body content string to find questions
+        try:
+            soup = BeautifulSoup(body_content, 'html.parser')
+            found_questions = soup.find_all('div', class_='que')
+            if not found_questions:
+                 print(f"Warning: No '<div class=\"que\">' elements found in the body of {mhtml_file}")
+            for div in found_questions:
+                questions_to_process.append(div)
+        except Exception as e:
+            print(f"Error parsing body content or finding questions in {mhtml_file}: {e}")
+            continue
+
+    print(f"Found {len(questions_to_process)} question divs in total.")
+
+    # Deduplicate and prioritize
+    final_questions = deduplicate_and_replace_with_correct(questions_to_process) # Assumes this function exists and is correct
+    print(f"Processing {len(final_questions)} unique/best questions for output.")
+
+    # Process the final list of questions
     for question in final_questions:
-        # Find the span with class ending in 'qno' and update the number
-        # Use re.compile to find span with class like 'qno', 'qnounderway', etc.
-        qno_span = question.find('span', class_=re.compile(r'qno')) # More robust finding
+        # Renumber question
+        qno_span = question.find('span', class_=re.compile(r'qno'))
         if qno_span:
-            # Find the actual number element, often a sibling or child
-            num_element = qno_span.find(string=re.compile(r'\d+')) # Find text node containing digits
+            num_element = qno_span.find(string=re.compile(r'\d+'))
             if num_element:
-                 num_element.replace_with(str(question_number)) # Replace the number text
+                 num_element.replace_with(str(question_number))
             else:
                  # Fallback if number is directly in the span
                  qno_span.string = str(question_number)
-            question_number += 1  # Increment the question number
+            question_number += 1
         else:
-             # If no qno span found, maybe add one? Or just log it.
              print(f"Warning: Question number span ('qno') not found in a question div.")
 
-
-        # Replace img src with base64 if it's a local image (from MHTML)
+        # Embed images
         for img in question.find_all('img'):
             img_src = img.get('src', '')
             if img_src in all_images:
                 image_base64, mime_type = all_images[img_src]
                 img['src'] = f"data:image/{mime_type};base64,{image_base64}"
-            # Optional: Handle images not found in all_images (e.g., external URLs)
-            # else:
-            #    print(f"Warning: Image source '{img_src}' not found in extracted images.")
 
-        # Append the processed question div to the HTML content
         consolidated_html += str(question)
 
-    consolidated_html += '</section></body></html>' # Close the section and body
+    consolidated_html += '</section></body></html>'
 
-    # Save the consolidated HTML to a file
-    with open(output_file, 'w', encoding='utf-8') as f:
-        f.write(consolidated_html)
-    print(f'Consolidated document saved as {output_file}')
+    # Save the consolidated HTML
+    try:
+        with open(output_html_file, 'w', encoding='utf-8') as f:
+            f.write(consolidated_html)
+        print(f'Consolidated document saved as {output_html_file}')
+    except Exception as e:
+        print(f"Error writing consolidated HTML file {output_html_file}: {e}")
 
 
 # --- Other functions (extract_css_from_mhtml, convert_html_to_pdf, find_wkhtmltopdf) remain the same ---
@@ -384,25 +467,127 @@ def find_wkhtmltopdf():
 
 # --- Main execution block ---
 if __name__ == '__main__':
-    # Directory containing the .mhtml files
-    mhtml_folder = 'Files'  # Changed to relative path
+    # --- Argument Parsing ---
+    parser = argparse.ArgumentParser(description='Consolidate Moodle quiz attempts from MHTML files.')
+    parser.add_argument(
+        'mhtml_folder_arg',
+        nargs='?',
+        default='Files',
+        help='Path to the folder containing MHTML files (defaults to "Files" subfolder)'
+    )
+    parser.add_argument(
+        '-p', '--pdf',
+        action='store_true',
+        help='Also generate a PDF output (requires wkhtmltopdf)'
+    )
+    parser.add_argument(
+        '-r', '--recursive',
+        action='store_true',
+        help='Search for MHTML files recursively in subfolders'
+    )
+    parser.add_argument(
+        '-n', '--name',
+        type=str,
+        default=None, # Default is None, meaning we extract from header
+        help='Specify a custom base name for the output files (overrides header extraction)'
+    )
 
-    # List all the mhtml files in the folder
-    mhtml_files = [os.path.join(mhtml_folder, f) for f in os.listdir(mhtml_folder) if f.endswith('.mhtml')]
+    args = parser.parse_args()
 
+    # --- Validate Folder Path ---
+    mhtml_folder = args.mhtml_folder_arg
+    if not os.path.exists(mhtml_folder):
+        print(f"Error: The specified folder does not exist: {mhtml_folder}")
+        sys.exit(1)
+    if not os.path.isdir(mhtml_folder):
+        print(f"Error: The specified path is not a directory: {mhtml_folder}")
+        sys.exit(1)
+
+    print(f"Using MHTML folder: {mhtml_folder}")
+
+    # --- List MHTML files (Conditional Recursive Search) ---
+    mhtml_files = []
+    try:
+        if args.recursive:
+            print("Searching recursively for MHTML files...")
+            for root, dirs, files in os.walk(mhtml_folder):
+                for filename in files:
+                    if filename.lower().endswith('.mhtml'):
+                        full_path = os.path.join(root, filename)
+                        mhtml_files.append(full_path)
+        else:
+            print("Searching non-recursively for MHTML files...")
+            for filename in os.listdir(mhtml_folder):
+                 if filename.lower().endswith('.mhtml'):
+                    full_path = os.path.join(mhtml_folder, filename)
+                    if os.path.isfile(full_path):
+                        mhtml_files.append(full_path)
+
+        mhtml_files.sort()
+        print(f"Found {len(mhtml_files)} MHTML file(s) to process.")
+
+    except Exception as e:
+        print(f"Error listing files in folder {mhtml_folder}: {e}")
+        sys.exit(1)
+
+    # --- Check if files were found and proceed ---
     if not mhtml_files:
-        print(f"No .mhtml files found in the '{mhtml_folder}' directory.")
+        print(f"No .mhtml files found in '{mhtml_folder}'" + (" or its subfolders." if args.recursive else "."))
     else:
-        # Output file for the consolidated document
-        output_file = 'Consolidated_Assessment.html'
-        output_pdf = 'Consolidated_Assessment.pdf'
+        # --- Extract Header String and potentially Title from the first file ---
+        print(f"Extracting header structure from first file: {mhtml_files[0]}")
+        _, _, first_header_str, extracted_title = extract_html_from_mhtml(mhtml_files[0]) # Assumes this function exists
 
-        # Consolidate the files
-        consolidate_mhtml_files(mhtml_files, output_file)
+        # --- Determine Base Filename (Custom or Extracted) ---
+        if args.name:
+            print(f"Using custom base name: '{args.name}'")
+            base_filename = sanitize_filename(args.name) # Assumes this function exists
+        else:
+            print(f"Using extracted title for base name: '{extracted_title}'")
+            base_filename = sanitize_filename(extracted_title) # Assumes this function exists
 
-        # Convert HTML to PDF with one question per page
-        # try:
-        #     convert_html_to_pdf(output_file, output_pdf)
-        # except Exception as e: # Catch broader exceptions from PDF conversion
-        #     print(f"Failed to convert HTML to PDF: {e}")
+        # --- Determine Output Filenames ---
+        output_file = f"{base_filename}.html"
+        output_pdf = f"{base_filename}.pdf"
+        print(f"Output HTML filename set to: {output_file}")
+        if args.pdf:
+            print(f"Output PDF filename set to: {output_pdf}")
+
+        # --- Modify Header String with Determined Title ---
+        modified_header_str = first_header_str # Start with the original
+        if first_header_str and base_filename: # Only modify if we have a header and a name
+            try:
+                header_soup = BeautifulSoup(first_header_str, 'html.parser')
+                # Find the first h1, h2, h3, or h4 tag within the header
+                heading_tag = header_soup.find(['h1', 'h2', 'h3', 'h4'])
+                if heading_tag:
+                    # Create a display-friendly title from the base filename
+                    display_title = base_filename.replace('_', ' ')
+                    print(f"Updating header tag '{heading_tag.name}' to: '{display_title}'")
+                    # Replace the content of the heading tag
+                    heading_tag.string = display_title
+                    # Get the modified header string
+                    modified_header_str = str(header_soup)
+                else:
+                    print("Warning: Could not find a heading tag (h1-h4) in the extracted header to update.")
+            except Exception as e:
+                print(f"Warning: Error occurred while modifying header string: {e}")
+                # Fallback to using the original header string
+                modified_header_str = first_header_str
+        # --- End of Header Modification ---
+
+
+        # --- Consolidate the files ---
+        # Pass the list of files, the dynamic output HTML name, and the MODIFIED header string
+        consolidate_mhtml_files(mhtml_files, output_file, modified_header_str) # Assumes this function exists
+
+        # --- Conditional PDF Conversion ---
+        if args.pdf:
+            print("\nAttempting PDF conversion...")
+            try:
+                convert_html_to_pdf(output_file, output_pdf) # Assumes this function exists
+            except Exception as e:
+                print(f"Failed to convert HTML to PDF: {e}")
+        else:
+            print("\nSkipping PDF generation (use -p or --pdf option to enable).")
 
