@@ -136,7 +136,3 @@ Moodle-Quiz-Agregator/
 ## Contributing
 
 Feel free to submit issues or pull requests. Please note that generated output files (`*.html`, `*.pdf`) should generally not be committed to the repository, as specified in the `.gitignore` file.
-
-## License
-
-(Specify your license here, e.g., MIT License)
