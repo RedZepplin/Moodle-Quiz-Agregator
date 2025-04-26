@@ -180,16 +180,15 @@ def extract_divs_from_html(html_content):
 
 
 # --- Modified deduplicate function ---
-def deduplicate_and_replace_with_correct(questions):
+def deduplicate_and_replace_with_correct(questions_to_process, question_counts, total_files):
     """
-    Refine deduplication by using the 'grade' div to determine correctness
-    and replacing less correct answers with more correct ones.
+    Refine deduplication using grade, store frequency count, and return enriched data.
     Prioritization: Correct > Partially Correct > Incorrect.
     """
-    question_map = {}  # Map to store unique questions with the best answer found so far
+    question_map = {}  # Map: question_text -> {'question': div, 'state': state, 'count': count}
 
-    # Loop through all the questions extracted from all files
-    for question in questions:
+    # Loop through all the raw question divs extracted
+    for question in questions_to_process:
         question_text_div = question.find('div', class_='qtext')
         if not question_text_div:
             print("Warning: Found a 'que' div without 'qtext'. Skipping.")
@@ -204,51 +203,61 @@ def deduplicate_and_replace_with_correct(questions):
         # Determine the state based on the grade text
         calculated_state = determine_correctness_from_grade(grade_text)
 
+        # Retrieve the total count for this question text
+        # Use .get for safety, although the text should exist if it came from the initial count
+        current_count = question_counts.get(question_text, 0)
+
         # --- Deduplication Logic based on calculated_state ---
         if question_text in question_map:
-            # A version of this question already exists in our map
+            # A version of this question already exists
             existing_entry = question_map[question_text]
             existing_state = existing_entry['state']
 
-            # Define state priorities (higher number is better)
+            # Define state priorities
             state_priority = {"Correct": 3, "Partially Correct": 2, "Incorrect": 1}
-
-            current_priority = state_priority.get(calculated_state, 0) # Default to 0 if state is unknown
+            current_priority = state_priority.get(calculated_state, 0)
             existing_priority = state_priority.get(existing_state, 0)
 
-            # Replace if the current question's state is better than the existing one
+            # Replace if the current question's state is better
             if current_priority > existing_priority:
-                question_map[question_text] = {'question': question, 'state': calculated_state}
-                # Optional: Log the replacement
-                # print(f"Replacing '{existing_state}' with '{calculated_state}' for question: {question_text[:50]}...")
+                # Store the best div, its state, and the total count
+                question_map[question_text] = {
+                    'question': question,
+                    'state': calculated_state,
+                    'count': current_count # Count remains the same for this question text
+                }
+                # print(f"Replacing '{existing_state}' with '{calculated_state}' for question: {question_text[:50]}...") # Optional debug
 
         else:
-            # If the question is not in the map, add it
-            question_map[question_text] = {'question': question, 'state': calculated_state}
+            # If the question is new, add it with its count
+            question_map[question_text] = {
+                'question': question,
+                'state': calculated_state,
+                'count': current_count
+            }
 
-    # Return the list of question divs corresponding to the best versions found
-    return [value['question'] for value in question_map.values()]
+    # Return the list of enriched dictionaries (values from the map)
+    return list(question_map.values())
 
 # --- consolidate_mhtml_files function ---
-# Needs a small adjustment to handle the re import if not already done globally
-# Also, ensure the logic using seen_divs still makes sense after deduplication
 def consolidate_mhtml_files(mhtml_files, output_html_file, first_file_header_str=""):
     """
-    Consolidates divs with class 'que' from multiple MHTML files into one HTML document.
+    Consolidates divs with class 'que' from multiple MHTML files into one HTML document,
+    including question frequency information.
     Uses the provided header string from the first file.
     """
-    # Use the title from the output filename for the HTML title tag
     html_title = os.path.splitext(os.path.basename(output_html_file))[0].replace('_', ' ')
-    consolidated_html = f'<html><head><meta charset="UTF-8"><title>{html_title}</title>' # Use dynamic title
+    consolidated_html = f'<html><head><meta charset="UTF-8"><title>{html_title}</title>'
 
-    # Extract CSS from the first MHTML file (still needed here)
+    # Extract CSS from the first MHTML file
     if mhtml_files:
         first_mhtml_file = mhtml_files[0]
-        css_content = extract_css_from_mhtml(first_mhtml_file) # Assumes extract_css_from_mhtml exists and is correct
+        css_content = extract_css_from_mhtml(first_mhtml_file)
         if css_content:
+            # Add a basic style for the frequency display
+            css_content += "\n.question-frequency { font-size: 0.85em; color: #444; margin-left: 15px; display: inline-block; vertical-align: middle; }"
             consolidated_html += f'<style>{css_content}</style>'
 
-    # Add the header content string passed from the main block
     if first_file_header_str:
         consolidated_html += f'{first_file_header_str}'
 
@@ -256,64 +265,107 @@ def consolidate_mhtml_files(mhtml_files, output_html_file, first_file_header_str
 
     question_number = 1
     all_images = {}
-    questions_to_process = []
+    questions_to_process = [] # List to hold all raw question divs
+    question_counts = {}      # Dictionary to count occurrences of each question text
+    processed_file_count = 0  # Count successfully processed files
 
-    # Process all files to gather questions and images
+    # --- First Pass: Gather all questions, images, and counts ---
     for mhtml_file in mhtml_files:
         print(f'Processing {mhtml_file}...')
-        # Get body content and images for this file
-        # We ignore header_content and title returned here as they are handled elsewhere/already extracted
         body_content, images, _, _ = extract_html_from_mhtml(mhtml_file)
 
-        if body_content is None: # Check if extraction failed
+        if body_content is None:
             print(f"Skipping file due to extraction error: {mhtml_file}")
             continue
 
-        # Merge images, giving priority to existing ones
+        # Merge images
         for loc, data in images.items():
             if loc not in all_images:
                 all_images[loc] = data
 
-        # Parse the body content string to find questions
+        # Parse body and count questions
         try:
             soup = BeautifulSoup(body_content, 'html.parser')
             found_questions = soup.find_all('div', class_='que')
             if not found_questions:
                  print(f"Warning: No '<div class=\"que\">' elements found in the body of {mhtml_file}")
+                 # Still count this file as processed if extraction was okay
+                 processed_file_count += 1
+                 continue # Skip to next file if no questions found
+
+            file_had_questions = False
             for div in found_questions:
-                questions_to_process.append(div)
+                questions_to_process.append(div) # Add raw div
+                # Count based on question text
+                qtext_div = div.find('div', class_='qtext')
+                if qtext_div:
+                    q_text = qtext_div.get_text(strip=True)
+                    question_counts[q_text] = question_counts.get(q_text, 0) + 1
+                    file_had_questions = True
+                else:
+                    print("Warning: Found 'que' div without 'qtext' while counting.")
+
+            if file_had_questions: # Increment count only if questions were found and processed
+                processed_file_count += 1
+
         except Exception as e:
             print(f"Error parsing body content or finding questions in {mhtml_file}: {e}")
+            # Do not increment processed_file_count if parsing failed
             continue
 
-    print(f"Found {len(questions_to_process)} question divs in total.")
+    print(f"Found {len(questions_to_process)} question divs in total across {processed_file_count} successfully processed files.")
+    print(f"Identified {len(question_counts)} unique question texts.")
 
-    # Deduplicate and prioritize
-    final_questions = deduplicate_and_replace_with_correct(questions_to_process) # Assumes this function exists and is correct
-    print(f"Processing {len(final_questions)} unique/best questions for output.")
+    # --- Deduplicate and prioritize ---
+    # Pass the raw questions, the counts, and the total number of files processed
+    if processed_file_count == 0:
+        print("Warning: No files were successfully processed. Output will be empty.")
+        final_question_data = []
+    else:
+        final_question_data = deduplicate_and_replace_with_correct(
+            questions_to_process, question_counts, processed_file_count
+        )
+    print(f"Processing {len(final_question_data)} unique/best questions for output.")
 
-    # Process the final list of questions
-    for question in final_questions:
-        # Renumber question
+    # --- Second Pass: Process the final list, renumber, embed images, add frequency ---
+    for item in final_question_data:
+        question = item['question'] # The BeautifulSoup tag for the question div
+        count = item['count']       # The frequency count for this question
+
+        # Calculate frequency percentage
+        frequency_percent = (count / processed_file_count) * 100 if processed_file_count > 0 else 0
+
+        # --- Inject Frequency Information ---
+        info_div = question.find('div', class_='info')
+        if info_div:
+            # Create the frequency span
+            freq_span = BeautifulSoup(f'<span class="question-frequency">Frequency: {count}/{processed_file_count} ({frequency_percent:.1f}%)</span>', 'html.parser').span
+            # Append it within the info div (e.g., after the number)
+            info_div.append(freq_span)
+        else:
+            print("Warning: 'info' div not found in a question. Cannot add frequency info directly.")
+            # Optionally, add it elsewhere as a fallback
+
+        # --- Renumber question ---
         qno_span = question.find('span', class_=re.compile(r'qno'))
         if qno_span:
             num_element = qno_span.find(string=re.compile(r'\d+'))
             if num_element:
                  num_element.replace_with(str(question_number))
             else:
-                 # Fallback if number is directly in the span
-                 qno_span.string = str(question_number)
+                 qno_span.string = str(question_number) # Fallback
             question_number += 1
         else:
              print(f"Warning: Question number span ('qno') not found in a question div.")
 
-        # Embed images
+        # --- Embed images ---
         for img in question.find_all('img'):
             img_src = img.get('src', '')
             if img_src in all_images:
                 image_base64, mime_type = all_images[img_src]
                 img['src'] = f"data:image/{mime_type};base64,{image_base64}"
 
+        # Add the modified question HTML to the consolidated output
         consolidated_html += str(question)
 
     consolidated_html += '</section></body></html>'
@@ -325,6 +377,7 @@ def consolidate_mhtml_files(mhtml_files, output_html_file, first_file_header_str
         print(f'Consolidated document saved as {output_html_file}')
     except Exception as e:
         print(f"Error writing consolidated HTML file {output_html_file}: {e}")
+
 
 
 # --- Other functions (extract_css_from_mhtml, convert_html_to_pdf, find_wkhtmltopdf) remain the same ---
@@ -395,12 +448,22 @@ def convert_html_to_pdf(html_file, output_pdf):
             style_tag = soup.new_tag('style')
             soup.head.append(style_tag) # Append if no style tag exists
 
-        # Add the rule to the existing or new style tag
-        # Important: Use !important to increase chance of overriding other styles
-        style_tag.string = (style_tag.string or '') + "\n.que { page-break-inside: avoid !important; overflow-wrap: break-word; } img { max-width: 100% !important; height: auto !important; }"
-        # Also added overflow-wrap and img max-width as common helpers
+       # Ensure existing styles are kept and add new ones
+        existing_style = style_tag.string or ''
+        additional_style = """
+        .que { page-break-inside: avoid !important; overflow-wrap: break-word; }
+        img { max-width: 100% !important; height: auto !important; }
+        .question-frequency { /* Style already added in consolidate, but can be reinforced here */
+            font-size: 0.85em;
+            color: #444;
+            margin-left: 15px;
+            display: inline-block;
+            vertical-align: middle;
+        }
+        """
+        # Combine styles, avoiding duplicates if possible (simple concatenation here)
+        style_tag.string = existing_style + additional_style
         # --- End of CSS addition ---
-
 
         first_que = True
         for que_div in soup.find_all('div', class_='que'):
