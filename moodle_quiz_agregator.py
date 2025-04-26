@@ -496,6 +496,7 @@ def find_wkhtmltopdf():
 
 
 # --- Main execution block ---
+# --- Main execution block ---
 if __name__ == '__main__':
     # --- Argument Parsing ---
     parser = argparse.ArgumentParser(description='Consolidate Moodle quiz attempts from MHTML files.')
@@ -577,11 +578,17 @@ if __name__ == '__main__':
             base_filename = sanitize_filename(extracted_title) # Assumes this function exists
 
         # --- Determine Output Filenames ---
-        output_file = f"{base_filename}.html"
-        output_pdf = f"{base_filename}.pdf"
-        print(f"Output HTML filename set to: {output_file}")
+        # ***** MODIFICATION START *****
+        # Construct the base part of the filename
+        base_output_name = f"Consolidated_{base_filename}"
+        # Use os.path.join to create the full path within the mhtml_folder
+        output_file = os.path.join(mhtml_folder, f"{base_output_name}.html")
+        output_pdf = os.path.join(mhtml_folder, f"{base_output_name}.pdf")
+        # ***** MODIFICATION END *****
+
+        print(f"Output HTML filename set to: {output_file}") # Will now show the full path
         if args.pdf:
-            print(f"Output PDF filename set to: {output_pdf}")
+            print(f"Output PDF filename set to: {output_pdf}") # Will now show the full path
 
         # --- Modify Header String with Determined Title ---
         modified_header_str = first_header_str # Start with the original
@@ -608,16 +615,19 @@ if __name__ == '__main__':
 
 
         # --- Consolidate the files ---
-        # Pass the list of files, the dynamic output HTML name, and the MODIFIED header string
+        # Pass the list of files, the dynamic output HTML name (now with full path),
+        # and the MODIFIED header string
         consolidate_mhtml_files(mhtml_files, output_file, modified_header_str) # Assumes this function exists
 
         # --- Conditional PDF Conversion ---
         if args.pdf:
             print("\nAttempting PDF conversion...")
             try:
+                # Pass the full paths for both input HTML and output PDF
                 convert_html_to_pdf(output_file, output_pdf) # Assumes this function exists
             except Exception as e:
                 print(f"Failed to convert HTML to PDF: {e}")
         else:
             print("\nSkipping PDF generation (use -p or --pdf option to enable).")
 
+# --- End of Main Execution Block ---
