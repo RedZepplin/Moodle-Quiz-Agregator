@@ -496,9 +496,9 @@ def find_wkhtmltopdf():
 
 
 # --- Main execution block ---
-# --- Main execution block ---
 if __name__ == '__main__':
     # --- Argument Parsing ---
+    # ... (argument parsing code remains the same) ...
     parser = argparse.ArgumentParser(description='Consolidate Moodle quiz attempts from MHTML files.')
     parser.add_argument(
         'mhtml_folder_arg',
@@ -537,6 +537,7 @@ if __name__ == '__main__':
     print(f"Using MHTML folder: {mhtml_folder}")
 
     # --- List MHTML files (Conditional Recursive Search) ---
+    # ... (file listing code remains the same) ...
     mhtml_files = []
     try:
         if args.recursive:
@@ -561,6 +562,7 @@ if __name__ == '__main__':
         print(f"Error listing files in folder {mhtml_folder}: {e}")
         sys.exit(1)
 
+
     # --- Check if files were found and proceed ---
     if not mhtml_files:
         print(f"No .mhtml files found in '{mhtml_folder}'" + (" or its subfolders." if args.recursive else "."))
@@ -581,16 +583,23 @@ if __name__ == '__main__':
         # ***** MODIFICATION START *****
         # Construct the base part of the filename
         base_output_name = f"Consolidated_{base_filename}"
-        # Use os.path.join to create the full path within the mhtml_folder
-        output_file = os.path.join(mhtml_folder, f"{base_output_name}.html")
-        output_pdf = os.path.join(mhtml_folder, f"{base_output_name}.pdf")
+
+        # Get the absolute path of the MHTML folder to handle relative paths correctly
+        abs_mhtml_folder = os.path.abspath(mhtml_folder)
+        # Get the parent directory of the absolute path
+        parent_dir = os.path.dirname(abs_mhtml_folder)
+
+        # Use os.path.join to create the full path within the PARENT directory
+        output_file = os.path.join(parent_dir, f"{base_output_name}.html")
+        output_pdf = os.path.join(parent_dir, f"{base_output_name}.pdf")
         # ***** MODIFICATION END *****
 
-        print(f"Output HTML filename set to: {output_file}") # Will now show the full path
+        print(f"Output HTML filename set to: {output_file}") # Will now show the full path in the parent dir
         if args.pdf:
-            print(f"Output PDF filename set to: {output_pdf}") # Will now show the full path
+            print(f"Output PDF filename set to: {output_pdf}") # Will now show the full path in the parent dir
 
         # --- Modify Header String with Determined Title ---
+        # ... (header modification code remains the same) ...
         modified_header_str = first_header_str # Start with the original
         if first_header_str and base_filename: # Only modify if we have a header and a name
             try:
@@ -611,7 +620,6 @@ if __name__ == '__main__':
                 print(f"Warning: Error occurred while modifying header string: {e}")
                 # Fallback to using the original header string
                 modified_header_str = first_header_str
-        # --- End of Header Modification ---
 
 
         # --- Consolidate the files ---
