@@ -298,15 +298,161 @@ def consolidate_source_files(source_files, output_html_file, css_content="", fir
     html_title = os.path.splitext(os.path.basename(output_html_file))[0].replace('_', ' ')
     consolidated_html = f'<html><head><meta charset="UTF-8"><title>{html_title}</title>'
 
-    if css_content:
-        # Add a basic style for the frequency display
-        css_content += "\n.question-frequency { font-size: 0.85em; color: #444; margin-left: 15px; display: inline-block; vertical-align: middle; }"
-        consolidated_html += f'<style>{css_content}</style>'
+    # Define the new, self-contained CSS for the question cards
+    card_styles = """
+    /* --- Question Card Styles --- */
+    .question-card {
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        margin-bottom: 25px;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.05);
+        background-color: #fff;
+        overflow: hidden;
+        page-break-inside: avoid !important;
+    }
+    .card-header {
+        background-color: #f8f9fa;
+        padding: 12px 20px;
+        border-bottom: 1px solid #dee2e6;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .card-header-left {
+        display: flex;
+        align-items: center;
+        gap: 15px;
+    }
+    .question-number {
+        font-size: 1.3em;
+        font-weight: 600;
+        color: #fff;
+        background-color: #6c757d;
+        border-radius: 50%;
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+    .card-meta {
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        font-size: 0.9em;
+        color: #495057;
+    }
+    .question-state {
+        font-weight: bold;
+        padding: 4px 10px;
+        border-radius: 12px;
+        color: #fff;
+        font-size: 0.85em;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    .question-frequency {
+        font-size: 0.9em;
+        color: #6c757d;
+    }
+    .question-card.state-correct { border-left: 5px solid #28a745; }
+    .question-card.state-correct .question-number { background-color: #28a745; }
+    .question-card.state-correct .question-state { background-color: #28a745; }
+
+    .question-card.state-partially-correct { border-left: 5px solid #ffc107; }
+    .question-card.state-partially-correct .question-number { background-color: #ffc107; }
+    .question-card.state-partially-correct .question-state { background-color: #ffc107; color: #212529; }
+
+    .question-card.state-incorrect { border-left: 5px solid #dc3545; }
+    .question-card.state-incorrect .question-number { background-color: #dc3545; }
+    .question-card.state-incorrect .question-state { background-color: #dc3545; }
+
+    .card-body {
+        padding: 20px;
+    }
+    .question-content, .answer-content {
+        margin-bottom: 15px;
+    }
+    .card-body .qtext {
+        font-size: 1.1em;
+        line-height: 1.6;
+    }
+    .card-body .ablock {
+        margin-top: 20px;
+    }
+    /* --- Styles for Answer Options (radio/checkbox) --- */
+    .card-body .answer-content .ablock .answer > div[class^='r'] {
+        display: flex;
+        align-items: flex-start; /* Aligns items to the top, good for multi-line labels */
+        padding: 6px 0;
+    }
+    .card-body .answer-content .ablock .answer input[type='radio'],
+    .card-body .answer-content .ablock .answer input[type='checkbox'] {
+        flex-shrink: 0; /* Prevent the input from shrinking */
+        margin-right: 10px;
+        margin-top: 0.2em; /* Small top margin to better align with text */
+    }
+    /* Target the div acting as a label, not a <label> tag */
+    .card-body .answer-content .ablock .answer div[data-region="answer-label"] {
+    }
+    /* --- Styles for custom feedback icons --- */
+    .feedback-icon {
+        display: inline-flex; /* Use flex to center content */
+        justify-content: center;
+        align-items: center;
+        width: 18px;
+        height: 18px;
+        font-weight: bold;
+        border-radius: 50%;
+        flex-shrink: 0;
+        margin-left: 10px;
+        margin-top: 0.1em; /* Align with text */
+    }
+    .feedback-icon.correct-icon {
+        background-color: #28a745;
+        color: white;
+    }
+    .feedback-icon.correct-icon::before {
+        content: '\\2713'; /* Checkmark character */
+        font-size: 12px;
+    }
+    .feedback-icon.incorrect-icon {
+        background-color: #dc3545;
+        color: white;
+    }
+    .feedback-icon.incorrect-icon::before {
+        content: '\\2717'; /* 'X' character */
+        font-size: 14px;
+        line-height: 1;
+    }
+    .card-footer {
+        background-color: #f8f9fa;
+        padding: 12px 20px;
+        border-top: 1px solid #dee2e6;
+        font-size: 0.95em;
+    }
+    .card-footer .rightanswer {
+        font-weight: 500;
+    }
+    .card-footer .generalfeedback {
+        margin-top: 12px;
+        padding-top: 12px;
+        border-top: 1px solid #e9ecef;
+        font-size: 0.9em;
+        color: #495057;
+    }
+    .card-footer .generalfeedback p {
+        margin-bottom: 0; /* Remove default paragraph margin */
+    }
+    """
+    final_css = css_content + "\n" + card_styles
+    consolidated_html += f'<style>{final_css}</style>'
 
     if first_file_header_str:
         consolidated_html += f'{first_file_header_str}'
 
-    consolidated_html += '</head><body><section>' # Start the main content section
+    consolidated_html += '</head><body><section style="padding: 20px; background-color: #f0f2f5;">' # Add padding and background
 
     question_number = 1
     all_images = {}
@@ -379,46 +525,87 @@ def consolidate_source_files(source_files, output_html_file, css_content="", fir
         )
     print(f"Processing {len(final_question_data)} unique/best questions for output.")
 
-    # --- Second Pass: Process the final list, renumber, embed images, add frequency ---
+    # --- Second Pass: Process the final list and build question cards ---
     for item in final_question_data:
         question = item['question'] # The BeautifulSoup tag for the question div
+        state = item['state']       # The state ('Correct', 'Partially Correct', 'Incorrect')
         count = item['count']       # The frequency count for this question
 
         # Calculate frequency percentage
         frequency_percent = (count / processed_file_count) * 100 if processed_file_count > 0 else 0
 
-        # --- Inject Frequency Information ---
-        info_div = question.find('div', class_='info')
-        if info_div:
-            # Create the frequency span
-            freq_span = BeautifulSoup(f'<span class="question-frequency">Frequency: {count}/{processed_file_count} ({frequency_percent:.1f}%)</span>', 'html.parser').span
-            # Append it within the info div (e.g., after the number)
-            info_div.append(freq_span)
-        else:
-            print("Warning: 'info' div not found in a question. Cannot add frequency info directly.")
-            # Optionally, add it elsewhere as a fallback
-
-        # --- Renumber question ---
-        qno_span = question.find('span', class_=re.compile(r'qno'))
-        if qno_span:
-            num_element = qno_span.find(string=re.compile(r'\d+'))
-            if num_element:
-                 num_element.replace_with(str(question_number))
-            else:
-                 qno_span.string = str(question_number) # Fallback
-            question_number += 1
-        else:
-             print(f"Warning: Question number span ('qno') not found in a question div.")
-
-        # --- Embed images ---
+        # --- Embed images in the original div first ---
+        # This ensures that when we stringify the inner divs, they have the correct image sources
         for img in question.find_all('img'):
             img_src = img.get('src', '')
             if img_src in all_images:
                 image_base64, mime_type = all_images[img_src]
                 img['src'] = f"data:image/{mime_type};base64,{image_base64}"
 
-        # Add the modified question HTML to the consolidated output
-        consolidated_html += str(question)
+        # --- Replace Moodle's feedback icons with self-contained CSS icons ---
+        # Find all spans that Moodle uses to wrap feedback icons
+        for icon_container in question.find_all('span', class_='rui-icon-container'):
+            # Find the actual image tag inside the container
+            img = icon_container.find('img', alt=re.compile(r'^(Correct|Incorrect)$', re.IGNORECASE))
+            if img:
+                # The presence of a "Correct" or "Incorrect" image signifies feedback.
+                # However, Moodle's HTML can be inconsistent. For example, when a user
+                # selects an incorrect checkbox, the row is marked 'incorrect'.
+                # We will trust the class on the parent answer row (`div.r0`, etc.)
+                # as the definitive source of truth for the icon.
+                parent_row = icon_container.find_parent('div', class_=re.compile(r'^r\d+'))
+                new_span = None
+
+                if parent_row:
+                    if 'incorrect' in parent_row.get('class', []):
+                        new_span = BeautifulSoup('<span class="feedback-icon incorrect-icon"></span>', 'html.parser').span
+                    elif 'correct' in parent_row.get('class', []):
+                        new_span = BeautifulSoup('<span class="feedback-icon correct-icon"></span>', 'html.parser').span
+
+                # If we created a new span, replace the entire original container with it
+                if new_span:
+                    icon_container.replace_with(new_span)
+
+        # --- Extract content from the original div ---
+        qtext_div = question.find('div', class_='qtext')
+        ablock_div = question.find('div', class_='ablock')
+        rightanswer_div = question.find('div', class_='rightanswer')
+        generalfeedback_div = question.find('div', class_='generalfeedback')
+
+        # Get the full HTML of the inner components to preserve their structure and classes
+        qtext_html = str(qtext_div) if qtext_div else "<p>Error: Question text not found.</p>"
+        ablock_html = str(ablock_div) if ablock_div else ""
+        rightanswer_html = str(rightanswer_div) if rightanswer_div else ""
+        generalfeedback_html = str(generalfeedback_div) if generalfeedback_div else ""
+
+        # --- Build the new Card HTML ---
+        state_class = state.lower().replace(' ', '-') # e.g., 'partially-correct'
+        state_display = state # e.g., 'Partially Correct'
+
+        card_html = f"""
+<div class="question-card state-{state_class}">
+    <div class="card-header">
+        <div class="card-header-left">
+            <span class="question-number">{question_number}</span>
+        </div>
+        <div class="card-meta">
+            <span class="question-state">{state_display}</span>
+            <span class="question-frequency">Frequency: {count}/{processed_file_count} ({frequency_percent:.1f}%)</span>
+        </div>
+    </div>
+    <div class="card-body">
+        <div class="question-content">{qtext_html}</div>
+        <div class="answer-content">{ablock_html}</div>
+    </div>"""
+        # Combine footer content, only create footer if there's content for it
+        footer_content = rightanswer_html + generalfeedback_html
+        if footer_content.strip():
+            card_html += f'<div class="card-footer">{footer_content}</div>'
+        card_html += "</div>" # Close question-card
+
+        # Add the new card HTML to the consolidated output
+        consolidated_html += card_html
+        question_number += 1
 
     consolidated_html += '</section></body></html>'
 
@@ -506,41 +693,59 @@ def convert_html_to_pdf(html_file, output_pdf):
     # Add page break *before* each question div and try to prevent breaks *inside*
     try:
         soup = BeautifulSoup(html_content, 'html.parser')
-
-        # --- Add CSS to prevent breaking inside questions ---
+        # --- Add/Reinforce CSS for PDF rendering ---
         style_tag = soup.head.find('style')
         if not style_tag:
             style_tag = soup.new_tag('style')
-            soup.head.append(style_tag) # Append if no style tag exists
+            soup.head.append(style_tag)
 
-       # Ensure existing styles are kept and add new ones
+        # The main card styles are already in the HTML. We just need to reinforce
+        # or add styles specifically for PDF printing.
         existing_style = style_tag.string or ''
-        additional_style = """
-        .que { page-break-inside: avoid !important; overflow-wrap: break-word; }
+        pdf_specific_style = """
+        /* PDF-specific overrides */
+        body, section { background-color: #fff !important; } /* Ensure white background for printing */
+        .question-card { box-shadow: none !important; border: 1px solid #bbb; }
         img { max-width: 100% !important; height: auto !important; }
-        .question-frequency { /* Style already added in consolidate, but can be reinforced here */
-            font-size: 0.85em;
-            color: #444;
-            margin-left: 15px;
-            display: inline-block;
-            vertical-align: middle;
+
+        /* --- PDF FIX for inline answers --- */
+        /* Use a table-based layout which is very robust in older renderers like wkhtmltopdf's.
+           This allows elements to shrink-to-fit their content. */
+        .card-body .answer-content .ablock .answer > div[class^='r'] {
+            display: table;
+            width: 100%;
+            padding: 4px 0; /* Add some vertical spacing between rows */
+        }
+        .card-body .answer-content .ablock .answer > div[class^='r'] > * {
+            display: table-cell;
+            vertical-align: top;
+            padding-right: 8px; /* Spacing between cells */
+            text-align: left;
+        }
+        /* In an auto-layout table, the browser/renderer will make the columns
+           with less content (like an input or icon) shrink to fit. */
+        .card-body .answer-content .ablock .answer > div[class^='r'] > input[type='radio'],
+        .card-body .answer-content .ablock .answer > div[class^='r'] > input[type='checkbox'] {
+            margin: 0.2em 0 0 0; /* Standardize margin */
+            box-sizing: border-box;
+        }
+        .card-body .answer-content .ablock .answer > div[class^='r'] > span.feedback-icon {
         }
         """
-        # Combine styles, avoiding duplicates if possible (simple concatenation here)
-        style_tag.string = existing_style + additional_style
-        # --- End of CSS addition ---
+        # The 'page-break-inside: avoid' is already on .question-card from the main style.
+        style_tag.string = existing_style + pdf_specific_style
 
-        first_que = True
-        for que_div in soup.find_all('div', class_='que'):
-            if not first_que:
-                # Add page break style before
-                if 'style' in que_div.attrs:
-                    # Ensure we don't duplicate the style if run multiple times on same file (though unlikely here)
-                    if 'page-break-before' not in que_div['style']:
-                         que_div['style'] += '; page-break-before: always;'
+        # --- Add page break before each card (except the first) ---
+        first_card = True
+        for card_div in soup.find_all('div', class_='question-card'):
+            if not first_card:
+                # Add page break style before the card
+                if 'style' in card_div.attrs:
+                    if 'page-break-before' not in card_div['style']:
+                         card_div['style'] += '; page-break-before: always;'
                 else:
-                    que_div['style'] = 'page-break-before: always;'
-            first_que = False
+                    card_div['style'] = 'page-break-before: always;'
+            first_card = False
 
         modified_html_content = str(soup)
 
