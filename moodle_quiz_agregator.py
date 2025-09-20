@@ -178,6 +178,55 @@ def extract_divs_from_html(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     return soup.find_all('div', class_='que')
 
+def extract_data_from_html_file(html_file):
+    """
+    Extracts HTML body, header, title, and an empty image dict from a standard HTML file.
+    Mimics the return signature of extract_html_from_mhtml for consistency.
+    """
+    try:
+        with open(html_file, 'r', encoding='utf-8', errors='ignore') as f:
+            soup = BeautifulSoup(f, 'html.parser')
+
+        body_content_str = ""
+        header_content_str = ""
+        document_title = None
+
+        # Extract body
+        body = soup.find('body')
+        if body:
+            body_content_str = str(body)
+        else:
+            print(f"Warning: No <body> tag found in {html_file}. Using full HTML content for body.")
+            body_content_str = str(soup)
+
+        # Extract header and title
+        header_div = soup.find('header', id='page-header')
+        if header_div:
+            header_content_str = str(header_div)
+            heading_tag = header_div.find(['h1', 'h2', 'h3','h4'])
+            if heading_tag:
+                title_text = heading_tag.get_text(separator=' ', strip=True)
+                if title_text:
+                    document_title = title_text
+
+        # Fallback to <title> tag if header-based title not found
+        if not document_title:
+            title_tag = soup.find('title')
+            if title_tag and title_tag.string:
+                document_title = title_tag.string.strip()
+
+        # HTML files don't have embedded images in the same way as MHTML
+        images = {}
+
+        return body_content_str, images, header_content_str, document_title
+
+    except FileNotFoundError:
+        print(f"Error: HTML file not found: {html_file}")
+        return None, {}, "", None
+    except Exception as e:
+        print(f"Error reading or parsing HTML file {html_file}: {e}")
+        return None, {}, "", None
+
 
 # --- Modified deduplicate function ---
 def deduplicate_and_replace_with_correct(questions_to_process, question_counts, total_files):
@@ -239,24 +288,20 @@ def deduplicate_and_replace_with_correct(questions_to_process, question_counts, 
     # Return the list of enriched dictionaries (values from the map)
     return list(question_map.values())
 
-# --- consolidate_mhtml_files function ---
-def consolidate_mhtml_files(mhtml_files, output_html_file, first_file_header_str=""):
+# --- consolidate_source_files function ---
+def consolidate_source_files(source_files, output_html_file, css_content="", first_file_header_str=""):
     """
-    Consolidates divs with class 'que' from multiple MHTML files into one HTML document,
+    Consolidates divs with class 'que' from multiple MHTML/HTML files into one HTML document,
     including question frequency information.
-    Uses the provided header string from the first file.
+    Uses the provided header string and CSS content.
     """
     html_title = os.path.splitext(os.path.basename(output_html_file))[0].replace('_', ' ')
     consolidated_html = f'<html><head><meta charset="UTF-8"><title>{html_title}</title>'
 
-    # Extract CSS from the first MHTML file
-    if mhtml_files:
-        first_mhtml_file = mhtml_files[0]
-        css_content = extract_css_from_mhtml(first_mhtml_file)
-        if css_content:
-            # Add a basic style for the frequency display
-            css_content += "\n.question-frequency { font-size: 0.85em; color: #444; margin-left: 15px; display: inline-block; vertical-align: middle; }"
-            consolidated_html += f'<style>{css_content}</style>'
+    if css_content:
+        # Add a basic style for the frequency display
+        css_content += "\n.question-frequency { font-size: 0.85em; color: #444; margin-left: 15px; display: inline-block; vertical-align: middle; }"
+        consolidated_html += f'<style>{css_content}</style>'
 
     if first_file_header_str:
         consolidated_html += f'{first_file_header_str}'
@@ -270,12 +315,19 @@ def consolidate_mhtml_files(mhtml_files, output_html_file, first_file_header_str
     processed_file_count = 0  # Count successfully processed files
 
     # --- First Pass: Gather all questions, images, and counts ---
-    for mhtml_file in mhtml_files:
-        print(f'Processing {mhtml_file}...')
-        body_content, images, _, _ = extract_html_from_mhtml(mhtml_file)
+    for source_file in source_files:
+        print(f'Processing {source_file}...')
+        images = {} # Reset for each file
+        if source_file.lower().endswith('.mhtml'):
+            body_content, images, _, _ = extract_html_from_mhtml(source_file)
+        elif source_file.lower().endswith('.html'):
+            body_content, images, _, _ = extract_data_from_html_file(source_file)
+        else:
+            print(f"Warning: Skipping unsupported file type: {source_file}")
+            continue
 
         if body_content is None:
-            print(f"Skipping file due to extraction error: {mhtml_file}")
+            print(f"Skipping file due to extraction error: {source_file}")
             continue
 
         # Merge images
@@ -288,7 +340,7 @@ def consolidate_mhtml_files(mhtml_files, output_html_file, first_file_header_str
             soup = BeautifulSoup(body_content, 'html.parser')
             found_questions = soup.find_all('div', class_='que')
             if not found_questions:
-                 print(f"Warning: No '<div class=\"que\">' elements found in the body of {mhtml_file}")
+                 print(f"Warning: No '<div class=\"que\">' elements found in the body of {source_file}")
                  # Still count this file as processed if extraction was okay
                  processed_file_count += 1
                  continue # Skip to next file if no questions found
@@ -309,7 +361,7 @@ def consolidate_mhtml_files(mhtml_files, output_html_file, first_file_header_str
                 processed_file_count += 1
 
         except Exception as e:
-            print(f"Error parsing body content or finding questions in {mhtml_file}: {e}")
+            print(f"Error parsing body content or finding questions in {source_file}: {e}")
             # Do not increment processed_file_count if parsing failed
             continue
 
@@ -401,6 +453,19 @@ def extract_css_from_mhtml(mhtml_file):
 
     # Alternatively, if there are external stylesheets (like <link rel="stylesheet">), we would need to handle those
     return css_content
+
+def extract_css_from_html_file(html_file):
+    """Extracts CSS from <style> tags in a standard HTML file."""
+    try:
+        with open(html_file, 'r', encoding='utf-8', errors='ignore') as f:
+            soup = BeautifulSoup(f, 'html.parser')
+        css_content = ""
+        for style_tag in soup.find_all('style'):
+            css_content += style_tag.get_text()
+        return css_content
+    except Exception as e:
+        print(f"Warning: Could not extract CSS from {html_file}: {e}")
+        return ""
 
 def convert_html_to_pdf(html_file, output_pdf):
     """Convert the consolidated HTML file to PDF with each question on a separate page."""
@@ -599,63 +664,74 @@ if __name__ == '__main__':
 
     print(f"Using MHTML folder: {mhtml_folder}")
 
-    # --- List MHTML files (Conditional Recursive Search) ---
-    # ... (file listing code remains the same) ...
+    # --- List MHTML and HTML files (Conditional Recursive Search) ---
     mhtml_files = []
+    html_files = []
     try:
         if args.recursive:
-            print("Searching recursively for MHTML files...")
+            print("Searching recursively for source files (.mhtml, .html)...")
             for root, dirs, files in os.walk(mhtml_folder):
                 for filename in files:
                     if filename.lower().endswith('.mhtml'):
                         full_path = os.path.join(root, filename)
                         mhtml_files.append(full_path)
+                    elif filename.lower().endswith('.html'):
+                        full_path = os.path.join(root, filename)
+                        html_files.append(full_path)
         else:
-            print("Searching non-recursively for MHTML files...")
+            print("Searching non-recursively for source files (.mhtml, .html)...")
             for filename in os.listdir(mhtml_folder):
-                 if filename.lower().endswith('.mhtml'):
-                    full_path = os.path.join(mhtml_folder, filename)
-                    if os.path.isfile(full_path):
+                full_path = os.path.join(mhtml_folder, filename)
+                if os.path.isfile(full_path):
+                    if filename.lower().endswith('.mhtml'):
                         mhtml_files.append(full_path)
+                    elif filename.lower().endswith('.html'):
+                        html_files.append(full_path)
 
         mhtml_files.sort()
-        print(f"Found {len(mhtml_files)} MHTML file(s) to process.")
+        html_files.sort()
+        source_files = mhtml_files + html_files # Process MHTML first, then HTML
+        print(f"Found {len(source_files)} source file(s) to process ({len(mhtml_files)} MHTML, {len(html_files)} HTML).")
 
     except Exception as e:
         print(f"Error listing files in folder {mhtml_folder}: {e}")
         sys.exit(1)
 
 
-    # --- Check if files were found and proceed ---
-    if not mhtml_files:
-        print(f"No .mhtml files found in '{mhtml_folder}'" + (" or its subfolders." if args.recursive else "."))
+    # --- Check if source files were found and proceed ---
+    if not source_files:
+        print(f"No .mhtml or .html files found in '{mhtml_folder}'" + (" or its subfolders." if args.recursive else "."))
     else:
-        # --- Extract Header String and potentially Title from the first file ---
-        print(f"Extracting header structure from first file: {mhtml_files[0]}")
-        _, _, first_header_str, extracted_title = extract_html_from_mhtml(mhtml_files[0]) # Assumes this function exists
+        # --- Extract Header, Title, and CSS from the first file ---
+        first_file_for_style = source_files[0]
+        print(f"Extracting header and CSS from first file: {first_file_for_style}")
+        first_header_str = ""
+        extracted_title = None
+        css_content = ""
+
+        if first_file_for_style.lower().endswith('.mhtml'):
+            _, _, first_header_str, extracted_title = extract_html_from_mhtml(first_file_for_style)
+            css_content = extract_css_from_mhtml(first_file_for_style)
+        elif first_file_for_style.lower().endswith('.html'):
+            _, _, first_header_str, extracted_title = extract_data_from_html_file(first_file_for_style)
+            css_content = extract_css_from_html_file(first_file_for_style)
 
         # --- Determine Base Filename (Custom or Extracted) ---
         if args.name:
             print(f"Using custom base name: '{args.name}'")
-            base_filename = sanitize_filename(args.name) # Assumes this function exists
+            base_filename = sanitize_filename(args.name)
         else:
             print(f"Using extracted title for base name: '{extracted_title}'")
-            base_filename = sanitize_filename(extracted_title) # Assumes this function exists
+            base_filename = sanitize_filename(extracted_title)
 
         # --- Determine Output Filenames ---
-        # ***** MODIFICATION START *****
-        # Construct the base part of the filename
         base_output_name = f"Consolidated_{base_filename}"
 
-        # Get the absolute path of the MHTML folder to handle relative paths correctly
         abs_mhtml_folder = os.path.abspath(mhtml_folder)
-        # Get the parent directory of the absolute path
         parent_dir = os.path.dirname(abs_mhtml_folder)
 
-        # Use os.path.join to create the full path within the PARENT directory
         output_file = os.path.join(parent_dir, f"{base_output_name}.html")
         output_pdf = os.path.join(parent_dir, f"{base_output_name}.pdf")
-        # ***** MODIFICATION END *****
 
         print(f"Output HTML filename set to: {output_file}") # Will now show the full path in the parent dir
         if args.pdf:
@@ -686,21 +762,18 @@ if __name__ == '__main__':
 
 
         # --- Consolidate the files ---
-        # Pass the list of files, the dynamic output HTML name (now with full path),
-        # and the MODIFIED header string
-        consolidate_mhtml_files(mhtml_files, output_file, modified_header_str) # Assumes this function exists
+        # Pass the list of files, output path, CSS, and the MODIFIED header string
+        consolidate_source_files(source_files, output_file, css_content, modified_header_str)
 
         # --- Conditional PDF Conversion ---
         if args.pdf:
             print("\nAttempting PDF conversion...")
             try:
                 # Pass the full paths for both input HTML and output PDF
-                convert_html_to_pdf(output_file, output_pdf) # Assumes this function exists
+                convert_html_to_pdf(output_file, output_pdf)
             except Exception as e:
                 print(f"Failed to convert HTML to PDF: {e}")
         else:
             print("\nSkipping PDF generation (use -p or --pdf option to enable).")
 
 # --- End of Main Execution Block ---
-
-
